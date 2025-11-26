@@ -1,0 +1,151 @@
+/**
+ * BAT Script Generator Tool - Cloud Edition
+ * Features: Sidebar, Appends Template Tabs (No Deletion), External User Lists.
+ */
+
+// --- CONFIGURATION ---
+// ⚠️ PASTE YOUR REAL TEMPLATE IDs HERE AGAIN
+const DSD_TEMPLATE_ID = "1pCVkW7Bri3VOkmqpK8c-lduSSzILlNBsbk5PtS6jMeM"; 
+const USER_TEMPLATE_ID = "1pCVkW7Bri3VOkmqpK8c-lduSSzILlNBsbk5PtS6jMeM"; 
+
+// --- UI SETUP ---
+
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('🚀 BAT Generator')
+      .addItem('Open Generator Tool', 'showSidebar')
+      .addToUi();
+}
+
+function showSidebar() {
+  const html = HtmlService.createHtmlOutputFromFile('Sidebar')
+      .setTitle('BAT Script Generator')
+      .setWidth(400); 
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+// --- CORE FUNCTIONS ---
+
+/**
+ * Loads a template into the current sheet.
+ * CHANGE: This version APPENDS tabs. It does NOT delete existing sheets.
+ */
+function loadTemplate(projectType) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 1. CHECK CONFIG
+  let templateId = (projectType === "DSD") ? DSD_TEMPLATE_ID : USER_TEMPLATE_ID;
+  
+  if (!templateId || templateId.includes("REPLACE")) {
+    throw new Error("Please check your Template IDs in the Code.gs file.");
+  }
+
+  try {
+    // 2. LOAD THE TEMPLATE FILE
+    const templateFile = DriveApp.getFileById(templateId);
+    const templateSs = SpreadsheetApp.open(templateFile);
+    const templateSheets = templateSs.getSheets();
+
+    if (templateSheets.length === 0) {
+      throw new Error("The template file appears to be empty!");
+    }
+
+    // 3. COPY NEW TABS IN
+    let newTabs = [];
+    templateSheets.forEach(sheet => {
+      let newName = sheet.getName();
+      
+      // Check if a sheet with this name already exists
+      // If yes, we rename the new one so we don't get an error
+      if (ss.getSheetByName(newName)) {
+         newName = newName + " (Copy " + Math.floor(Math.random() * 1000) + ")"; 
+      }
+      
+      const copiedSheet = sheet.copyTo(ss).setName(newName);
+      newTabs.push(copiedSheet);
+    });
+
+    // 4. ACTIVATE THE FIRST NEW TAB
+    if (newTabs.length > 0) {
+      newTabs[0].activate();
+    }
+
+    return "✅ Template loaded successfully (Appended)!";
+
+  } catch (e) {
+    throw new Error("Error loading template: " + e.message);
+  }
+}
+
+// --- EXTERNAL FILE LOGIC (User List) ---
+
+function getIdFromUrl(url) {
+  try {
+    const idMatch = url.match(/[-\w]{25,}/);
+    return idMatch ? idMatch[0] : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function validateUserFile(url) {
+  const id = getIdFromUrl(url);
+  if (!id) throw new Error("Invalid URL. Please paste a full Google Sheet link.");
+
+  try {
+    const ss = SpreadsheetApp.openById(id); 
+    return {
+      name: ss.getName(),
+      id: id,
+      status: "✅ Connected"
+    };
+  } catch (e) {
+    throw new Error("Could not access file. Check permissions.");
+  }
+}
+
+function generateTesterSheets(selectedMca, projectType, dbFileId) {
+  if (!dbFileId) throw new Error("No User List connected!");
+
+  // 1. Open the External User Database
+  const dbSs = SpreadsheetApp.openById(dbFileId);
+  const dbSheet = dbSs.getSheets()[0]; // Assumes data is on the FIRST tab
+  
+  // 2. Get the Template to Copy
+  let templateId = (projectType === "DSD") ? DSD_TEMPLATE_ID : USER_TEMPLATE_ID;
+  const templateFile = DriveApp.getFileById(templateId);
+  
+  // 3. Determine Output Folder (Same as current sheet)
+  const currentSs = SpreadsheetApp.getActiveSpreadsheet();
+  const folder = DriveApp.getFileById(currentSs.getId()).getParents().next();
+
+  // 4. Read Data from External File
+  const data = dbSheet.getDataRange().getValues();
+  const headers = data.shift(); // Remove header row
+
+  let createdCount = 0;
+
+  // 5. Loop through rows
+  data.forEach(row => {
+    // Column Mapping: A(0)=Name, B(1)=Availability, C(2)=Type, D(3)=MCA, E(4)=Stream
+    const name = row[0];       
+    const availability = row[1];     
+    const personMca = row[3];  
+    const stream = row[4];     
+
+    // LOGIC: MCA Matches? AND Availability contains "Accepted"?
+    if (personMca && personMca.toString().toUpperCase() === selectedMca.toUpperCase() && 
+        availability && availability.toString().toLowerCase().includes("accepted")) {
+      
+      let newFileName = `${name}_${personMca}_${stream}`;
+      templateFile.makeCopy(newFileName, folder);
+      createdCount++;
+    }
+  });
+
+  if (createdCount === 0) {
+    return "⚠️ No 'Accepted' users found for " + selectedMca + " in that file.";
+  }
+  
+  return "🚀 Success! Created " + createdCount + " files for " + selectedMca;
+}
