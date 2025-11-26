@@ -1,0 +1,360 @@
+"""
+BAT Script Generator Tool (Modern GUI Edition)
+Updated with customtkinter and Google Sheets
+"""
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog
+import customtkinter as ctk  # Modern UI Library
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import PatternFill, Font
+import os
+
+# --- Try to import tksheet ---
+import tksheet
+
+# --- Google Sheets dependencies ---
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+except ImportError:
+    import subprocess, sys
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "gspread", "google-auth"])
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+
+# --- PATCH tksheet TO HANDLE INVALID COLORS ---
+_original_get_text_fg = tksheet.main_table.MainTable.redraw_highlight_get_text_fg
+def safe_get_text_fg(self, *args, **kwargs):
+    try:
+        color = _original_get_text_fg(self, *args, **kwargs)
+        if not color or color.upper() in ("#00000000", "#FFFFFFFF"):
+            color = "#000000"
+        return color
+    except KeyError:
+        return "#000000"
+tksheet.main_table.MainTable.redraw_highlight_get_text_fg = safe_get_text_fg
+
+
+# --- CONFIGURATION ---
+DSD_TEMPLATE_PATH = r"C:\Users\MMURCRKH\Desktop\WORK\PYTHON_SCRIPT\BAT SCRIPT TOOL\MASTER_TEMPLATE_.xlsx"
+USER_TEMPLATE_PATH = r"C:\Users\MMURCRKH\Desktop\WORK\PYTHON_SCRIPT\BAT SCRIPT TOOL\TEST_SCRIPT..xlsx"
+EXTRA_ROWS = 150
+EXTRA_COLS = 26
+
+# --- Google Sheets config ---
+GSCOPE = ["https://www.googleapis.com/auth/spreadsheets",
+          "https://www.googleapis.com/auth/drive.file",
+          "https://www.googleapis.com/auth/drive"]
+GCREDS_PATH = r"C:\Users\madhuri.jn\Desktop\gcreds.json"
+
+
+# --- UTILITIES ---
+def create_blank_excel(path):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    wb.save(path)
+
+def sanitize_color(color):
+    if not color or color.upper() in ("00000000", "FFFFFFFF"):
+        return "#FFFFFF", "#000000"
+    if len(color) == 8:
+        color = color[2:]
+    try:
+        r, g, b = int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
+        brightness = (r * 299 + g * 587 + b * 114) / 1000
+        fg = "#FFFFFF" if brightness < 128 else "#000000"
+        return f"#{color}", fg
+    except:
+        return "#FFFFFF", "#000000"
+
+def read_excel_with_colors(path):
+    wb = load_workbook(path)
+    sheets_data = {}
+    sheets_colors = {}
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        data = []
+        colors = []
+        for row in ws.iter_rows():
+            row_data = []
+            row_colors = []
+            for cell in row:
+                row_data.append(cell.value if cell.value is not None else "")
+                fill = None
+                if cell.fill and cell.fill.start_color and cell.fill.start_color.type == "rgb":
+                    fill = cell.fill.start_color.rgb
+                    if fill == "00000000":
+                        fill = None
+                row_colors.append(fill)
+            data.append(row_data)
+            colors.append(row_colors)
+        sheets_data[sheet_name] = data
+        sheets_colors[sheet_name] = colors
+    return sheets_data, sheets_colors
+
+
+# --- CORE LOGIC FUNCTIONS ---
+
+def create_sheet_tab(sheet_name, data=None, colors=None):
+    """Creates a new tab in the Modern CTkTabview with a tksheet inside."""
+    try:
+        # In CTk, .add() returns the frame automatically!
+        frame = sheet_notebook.add(sheet_name)
+    except ValueError:
+        # If tab already exists, just select it
+        sheet_notebook.set(sheet_name)
+        return
+
+    # Create the grid inside the tab
+    sheet_widget = tksheet.Sheet(frame)
+    sheet_widget.pack(fill="both", expand=True)
+    sheet_widget.enable_bindings((
+        "single_select", "row_select", "column_select", "arrowkeys",
+        "right_click_popup_menu", "rc_select", "edit_cell",
+        "copy", "cut", "paste", "delete", "undo", "resize",
+    ))
+
+    # Handle Data Padding
+    if not data:
+        data = [["" for _ in range(EXTRA_COLS)] for _ in range(EXTRA_ROWS)]
+        colors = [[None for _ in range(EXTRA_COLS)] for _ in range(EXTRA_ROWS)]
+    else:
+        rows = len(data)
+        cols = max(len(r) for r in data)
+        total_rows = max(rows, EXTRA_ROWS)
+        total_cols = max(cols, EXTRA_COLS)
+        for r in range(total_rows):
+            if r >= len(data):
+                data.append(["" for _ in range(total_cols)])
+                colors.append([None for _ in range(total_cols)])
+            else:
+                while len(data[r]) < total_cols:
+                    data[r].append("")
+                while len(colors[r]) < total_cols:
+                    colors[r].append(None)
+
+    sheet_widget.set_sheet_data(data)
+
+    # Handle Colors
+    sanitized_fg = []
+    for r, row_colors in enumerate(colors):
+        fg_row = []
+        for c, color in enumerate(row_colors):
+            if color:
+                bg_color, fg_color = sanitize_color(color)
+                sheet_widget.highlight_cells(row=r, column=c, bg=bg_color, fg=fg_color)
+                row_colors[c] = bg_color
+                fg_row.append(fg_color)
+            else:
+                fg_row.append(None)
+        sanitized_fg.append(fg_row)
+
+    # Save references to the frame for later export
+    frame.sheet_widget = sheet_widget
+    frame.bg_colors = colors
+    frame.fg_colors = sanitized_fg
+
+
+def load_template():
+    project_type = project_id_var.get()
+    
+    # 1. Determine Path
+    if project_type == "DSD":
+        if not os.path.exists(DSD_TEMPLATE_PATH):
+            messagebox.showerror("Error", f"Template not found: {DSD_TEMPLATE_PATH}")
+            return
+        excel_path = DSD_TEMPLATE_PATH
+    else:
+        if not os.path.exists(USER_TEMPLATE_PATH):
+            create_blank_excel(USER_TEMPLATE_PATH)
+        excel_path = USER_TEMPLATE_PATH
+
+    # 2. Read Data
+    try:
+        sheets_data, sheets_colors = read_excel_with_colors(excel_path)
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to read Excel: {e}")
+        return
+
+    # 3. Create Tabs
+    # Note: We just append new tabs. CTkTabview doesn't support easy 'delete all' yet.
+    for sheet_name in sheets_data:
+        create_sheet_tab(sheet_name, sheets_data[sheet_name], sheets_colors[sheet_name])
+
+    messagebox.showinfo("Loaded", f"Loaded: {os.path.basename(excel_path)}")
+
+
+def toggle_mode():
+    if mode_switch.get() == 1:
+        ctk.set_appearance_mode("Dark")
+    else:
+        ctk.set_appearance_mode("Light")
+
+
+def add_sheet():
+    new_name = simpledialog.askstring("New Sheet", "Enter new sheet name:")
+    if not new_name:
+        return
+    # Check if tab exists (Standard CTk way is hard, so we just try to add it)
+    create_sheet_tab(new_name)
+    sheet_notebook.set(new_name)
+
+
+def delete_sheet():
+    try:
+        current_tab = sheet_notebook.get() # Get name of current tab
+        if messagebox.askyesno("Confirm", f"Delete sheet '{current_tab}'?"):
+            sheet_notebook.delete(current_tab)
+    except:
+        messagebox.showwarning("Warning", "No sheet selected or available to delete.")
+
+
+def create_gsheet_from_workbook(wb, base_name, count):
+    try:
+        creds = Credentials.from_service_account_file(GCREDS_PATH, scopes=GSCOPE)
+        client = gspread.authorize(creds)
+
+        for i in range(1, count + 1):
+            sheet_title = f"{base_name}_{i}"
+            gsheet = client.create(sheet_title)
+
+            for ws in wb.worksheets:
+                if ws.title == "Sheet":
+                    continue
+                try:
+                    g_ws = gsheet.add_worksheet(title=ws.title, rows=str(ws.max_row), cols=str(ws.max_column))
+                except Exception:
+                    g_ws = gsheet.sheet1
+                    g_ws.update_title(ws.title)
+
+                data = [[cell.value if cell.value is not None else "" for cell in row] for row in ws.iter_rows()]
+                g_ws.update(data)
+
+            print(f"✅ Created Google Sheet: {sheet_title}")
+
+        messagebox.showinfo("Google Sheets", f"{count} Google Sheets created successfully!")
+
+    except Exception as e:
+        messagebox.showerror("Google Sheets Error", f"Failed to create Google Sheets:\n{e}")
+
+
+def generate_excel():
+    try:
+        count = simpledialog.askinteger("Generate", "Number of files:", minvalue=1)
+        if not count: return
+    except: return
+
+    save_path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel Files", "*.xlsx")])
+    if not save_path: return
+
+    base_name, ext = os.path.splitext(save_path)
+    wb_master = None
+    
+    # Get all tab names currently in the notebook
+    # Note: CTkTabview stores tabs in ._tab_dict (internal)
+    try:
+        current_tab_names = list(sheet_notebook._tab_dict.keys())
+    except:
+        current_tab_names = []
+
+    for i in range(1, count + 1):
+        wb = Workbook()
+        
+        for sheet_name in current_tab_names:
+            # Get frame and widget
+            frame = sheet_notebook.tab(sheet_name)
+            if hasattr(frame, 'sheet_widget'):
+                sheet_widget = frame.sheet_widget
+                data = sheet_widget.get_sheet_data()
+                bg_colors = getattr(frame, "bg_colors", None)
+                fg_colors = getattr(frame, "fg_colors", None)
+
+                ws = wb.create_sheet(title=sheet_name)
+                for r, row in enumerate(data, start=1):
+                    for c, value in enumerate(row, start=1):
+                        cell = ws.cell(row=r, column=c, value=value)
+                        # Apply Colors
+                        if bg_colors and r-1 < len(bg_colors) and c-1 < len(bg_colors[r-1]):
+                            bg = bg_colors[r-1][c-1]
+                            if bg: cell.fill = PatternFill(start_color=bg.lstrip("#"), end_color=bg.lstrip("#"), fill_type="solid")
+                        if fg_colors and r-1 < len(fg_colors) and c-1 < len(fg_colors[r-1]):
+                            fg = fg_colors[r-1][c-1]
+                            if fg: cell.font = Font(color=fg.lstrip("#"))
+
+        if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
+            wb.remove(wb["Sheet"])
+
+        filename = f"{base_name}_{i}{ext}"
+        wb.save(filename)
+        wb_master = wb
+
+    messagebox.showinfo("Saved", f"{count} Excel files saved successfully!")
+    
+    if messagebox.askyesno("Google Sheets", "Create Google Sheets versions?"):
+        create_gsheet_from_workbook(wb_master, os.path.basename(base_name), count)
+
+
+# ============================================================== #
+#                         GUI DESIGN SECTION                     #
+# ============================================================== #
+
+# --- THEME SETUP ---
+ctk.set_appearance_mode("Dark")  
+ctk.set_default_color_theme("blue")
+
+root = ctk.CTk()  
+root.title("BAT Script Generator")
+root.geometry("1200x700")
+
+# --- WINDOW CONTROLS ---
+root.resizable(width=True, height=True) 
+root.minsize(800, 600) 
+
+# --- HEADER FRAME & SWITCH ---
+header_frame = ctk.CTkFrame(root, fg_color="transparent")
+header_frame.pack(pady=15, fill="x", padx=20)
+
+header = ctk.CTkLabel(header_frame, text="BAT Script Generator", font=("Segoe UI Semibold", 24))
+header.pack(side="left")
+
+mode_switch = ctk.CTkSwitch(header_frame, text="Dark Mode", command=toggle_mode, onvalue=1, offvalue=0)
+mode_switch.select() 
+mode_switch.pack(side="right")
+
+
+# --- PROJECT SELECTION (MODERN PILL) ---
+project_frame = ctk.CTkFrame(root, fg_color="transparent")
+project_frame.pack(pady=10)
+
+ctk.CTkLabel(project_frame, text="Select Project ID:").grid(row=0, column=0, padx=10)
+
+project_id_var = ctk.StringVar(value="DSD")
+
+project_dropdown = ctk.CTkSegmentedButton(project_frame, values=["DSD", "User Defined"], variable=project_id_var)
+project_dropdown.grid(row=0, column=1, padx=10)
+
+load_template_btn = ctk.CTkButton(project_frame, text="Load Template", command=load_template)
+load_template_btn.grid(row=0, column=2, padx=10)
+
+
+# --- NOTEBOOK (MODERN TABVIEW) ---
+sheet_notebook = ctk.CTkTabview(root, width=1100, height=500)
+sheet_notebook.pack(fill="both", expand=True, padx=20, pady=10)
+
+
+# --- ACTION BUTTONS (MODERN) ---
+btn_frame = ctk.CTkFrame(root, fg_color="transparent")
+btn_frame.pack(pady=15)
+
+delete_sheet_btn = ctk.CTkButton(btn_frame, text="🗑️ Delete Sheet", command=delete_sheet, fg_color="#E04F5F", hover_color="#C0392B")
+add_sheet_btn = ctk.CTkButton(btn_frame, text="➕ Add Sheet", command=add_sheet, fg_color="gray")
+generate_excel_btn = ctk.CTkButton(btn_frame, text="🚀 Generate Files", command=generate_excel, fg_color="#2CC985", text_color="white", hover_color="#218c5d")
+
+delete_sheet_btn.grid(row=0, column=0, padx=30)
+add_sheet_btn.grid(row=0, column=1, padx=10)
+generate_excel_btn.grid(row=0, column=2, padx=10)
+
+root.mainloop()
