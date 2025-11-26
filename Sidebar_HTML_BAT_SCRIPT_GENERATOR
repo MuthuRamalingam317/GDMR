@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link href="https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+      body { background-color: #2b2b2b; color: #ffffff; font-family: 'Segoe UI', sans-serif; padding: 15px; }
+      h2 { text-align: center; margin-bottom: 20px; font-weight: 600; }
+
+      /* INPUTS & SELECTS */
+      select, input[type="text"] {
+        width: 100%; padding: 10px; margin-bottom: 10px;
+        border-radius: 8px; border: 1px solid #555;
+        background-color: #1e1e1e; color: white; font-size: 13px;
+        box-sizing: border-box;
+      }
+      select { cursor: pointer; }
+      select:focus, input:focus { outline: none; border-color: #3B8ED0; }
+
+      /* BUTTONS */
+      button {
+        width: 100%; padding: 10px; margin-top: 5px;
+        border: none; border-radius: 8px; font-size: 14px;
+        cursor: pointer; transition: 0.2s; display: flex;
+        align-items: center; justify-content: center; gap: 8px;
+      }
+      .btn-primary { background-color: #3B8ED0; color: white; }
+      .btn-primary:hover { background-color: #3278b0; }
+      .btn-success { background-color: #2CC985; color: white; }
+      .btn-success:hover { background-color: #218c5d; }
+      .btn-connect { background-color: #555; color: white; font-size: 12px; padding: 8px; }
+      .btn-connect:hover { background-color: #666; }
+
+      /* UTILS */
+      hr { border-color: #444; margin: 20px 0; }
+      label { font-size: 12px; color: #aaa; margin-bottom: 5px; display:block; }
+      #file-status { font-size: 11px; color: #2CC985; margin-top: -5px; margin-bottom: 10px; min-height:15px;}
+      #status { margin-top: 20px; font-size: 12px; text-align: center; color: #aaa; }
+    </style>
+  </head>
+  <body>
+
+    <h2>BAT Generator</h2>
+
+    <label>Select Project Type:</label>
+    <select id="projectSelect">
+      <option value="DSD">DSD</option>
+      <option value="User Defined">User Defined</option>
+    </select>
+
+    <button class="btn-primary" onclick="loadTemplate()">📥 Load Template</button>
+
+    <hr>
+
+    <label>Link to User List (Google Sheet):</label>
+    <div style="display:flex; gap:5px;">
+      <input type="text" id="userListUrl" placeholder="Paste https://docs.google.com/..." />
+      <button class="btn-connect" style="width:auto;" onclick="connectFile()">🔗</button>
+    </div>
+    <div id="file-status"></div> <hr>
+
+    <label>Select MCA Team:</label>
+    <select id="mcaSelect" onchange="checkMca()">
+      <option value="">-- Select MCA --</option> 
+      <option value="CAF">DOORS / CAF</option>
+      <option value="WING">WING</option>
+      <option value="RFE">RFE</option>
+      <option value="NFF">NFF</option>
+      <option value="PROP">PROP</option>
+      <option value="NCF">NCF</option>
+    </select>
+
+    <button id="btn-batch" class="btn-success" style="display:none; margin-top:15px;" onclick="runBatchGen()">
+      ⚡ Generate Files
+    </button>
+
+    <div id="status">Ready</div>
+
+    <script>
+      let connectedFileId = null; // We store the ID here after connecting
+
+      function loadTemplate() {
+        const project = document.getElementById('projectSelect').value;
+        setStatus("Loading template...");
+        google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onFailure).loadTemplate(project);
+      }
+
+      function connectFile() {
+        const url = document.getElementById('userListUrl').value;
+        if (!url) return setStatus("Please paste a URL first.");
+        
+        setStatus("Connecting to file...");
+        document.getElementById('file-status').innerText = "Checking...";
+        
+        google.script.run
+          .withSuccessHandler(function(result) {
+             connectedFileId = result.id; // STORE THE ID
+             document.getElementById('file-status').innerText = result.status + ": " + result.name;
+             setStatus("File Connected!");
+             checkMca(); // Re-check if button should show
+          })
+          .withFailureHandler(function(e){
+             document.getElementById('file-status').innerText = "❌ Connection Failed";
+             onFailure(e);
+          })
+          .validateUserFile(url);
+      }
+
+      function checkMca() {
+        const mca = document.getElementById('mcaSelect').value;
+        const btn = document.getElementById('btn-batch');
+        
+        // Only show button if MCA is picked AND File is connected
+        if (mca !== "") {
+            btn.style.display = "flex";
+            if (connectedFileId) {
+                btn.innerText = "⚡ Generate for " + mca;
+                btn.disabled = false;
+                btn.style.opacity = "1";
+            } else {
+                btn.innerText = "⚠️ Connect User File First";
+                btn.disabled = true;
+                btn.style.opacity = "0.5";
+            }
+        } else {
+            btn.style.display = "none";
+        }
+      }
+
+      function runBatchGen() {
+        if(!connectedFileId) return setStatus("Please connect a User List file first.");
+        const mca = document.getElementById('mcaSelect').value;
+        const project = document.getElementById('projectSelect').value;
+
+        setStatus("Processing list for " + mca + "...");
+        
+        google.script.run
+          .withSuccessHandler(onSuccess)
+          .withFailureHandler(onFailure)
+          .generateTesterSheets(mca, project, connectedFileId);
+      }
+
+      function onSuccess(msg) { setStatus(msg); }
+      function onFailure(error) { setStatus("Error: " + error.message); }
+      function setStatus(msg) { document.getElementById('status').innerText = msg; }
+    </script>
+  </body>
+</html>
