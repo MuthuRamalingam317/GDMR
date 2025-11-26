@@ -1,0 +1,65 @@
+import re
+from openpyxl import Workbook
+import os
+
+
+def extract_max_von_mises(input_file, output_file):
+    """
+    Extracts the max Von Mises value for each subcase and writes to a single Excel sheet.
+    """
+    subcase_pattern = re.compile(r"SUBCASE=(\d+)")
+    von_mises_pattern = re.compile(r"([-+0-9.E]+)$")
+
+    max_values = {}
+    current_subcase = None
+
+    try:
+        with open(input_file, 'r') as f:
+            for line in f:
+                # Check for a subcase header
+                subcase_match = subcase_pattern.search(line)
+                if subcase_match:
+                    current_subcase = int(subcase_match.group(1))
+                    max_values[current_subcase] = -float('inf')  # Initialize with a very small number
+                    continue
+
+                # If in a subcase, check for a Von Mises value
+                if current_subcase is not None:
+                    von_mises_match = von_mises_pattern.search(line)
+                    if von_mises_match:
+                        value = float(von_mises_match.group(1))
+                        if value > max_values[current_subcase]:
+                            max_values[current_subcase] = value
+    except FileNotFoundError:
+        print(f"Error: The file {input_file} was not found.")
+        return
+
+    if not max_values:
+        print("No subcase data found in the file.")
+        return
+
+    # Write the results to a new Excel file
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Max Von Mises Values"
+
+    ws.append(["Subcase", "Max Von Mises Value"])
+    for subcase, max_val in sorted(max_values.items()):
+        ws.append([f"Subcase {subcase}", max_val])
+
+    # Save the workbook
+    try:
+        wb.save(output_file)
+        print(f"Successfully saved max Von Mises values to {output_file}")
+    except Exception as e:
+        print(f"An error occurred while saving the file: {e}")
+
+
+# --- Run the example script ---
+# You need to have the 'example.txt' file in the same folder as this script.
+# The output file 'max_von_mises.xlsx' will be created automatically.
+if __name__ == "__main__":
+    if os.path.exists("example.txt"):
+        extract_max_von_mises("example.txt", "max_von_mises.xlsx")
+    else:
+        print("Please create the 'example.txt' file with the content provided above first.")
